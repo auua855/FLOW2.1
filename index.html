@@ -1210,6 +1210,7 @@
                 if (dist < baseThreshold) {
                     if (!guest.userData.isContacting) {
                         guest.userData.isContacting = true;
+                        guest.userData.contacted = true; // Mark as interacted for button hiding
                         contactCount++;
                         if (contactCountDisplay) contactCountDisplay.innerText = contactCount;
                         rayEmissiveIntensity = 1.0;
@@ -1298,6 +1299,15 @@
                 [...dailyGuests, ...worldObjects].forEach(obj => {
                     if (obj.userData.isGuest) { // Included Orbs
                         const d = ray.position.distanceTo(obj.position);
+
+                        // Reset Contacted Flag if far enough
+                        if (obj.userData.contacted && d > 200.0) {
+                            obj.userData.contacted = false;
+                        }
+
+                        // Skip if recently contacted (unless reset)
+                        if (obj.userData.contacted) return;
+
                         if (d < threshold && d < closestDist) {
                             closestDist = d;
                             target = obj;
@@ -1607,7 +1617,7 @@
                                 if (distToTarget < hitThreshold) {
                                     if (potentialTarget.userData.guestType === 'orb') {
                                         // Orb: Do NOT enter Chase Mode on tap
-                                        AudioSys.playContactTone(); // Just feedback
+                                        // No Audio (Silent interaction as per user request)
                                         return;
                                     }
                                     isChasing = true;
@@ -1625,7 +1635,7 @@
                             if (obj === selectionRing && potentialTarget) {
                                 if (potentialTarget.userData.guestType === 'orb') {
                                     // Orb: Do NOT enter Chase Mode on tap
-                                    AudioSys.playContactTone();
+                                    // No Audio
                                     return;
                                 }
                                 isChasing = true;
@@ -1915,7 +1925,7 @@
                 }
                 updateVapor(currentSpeedKmH);
                 if (ray.position.y < CONFIG.landingHeight) {
-                    if (takeoffProgress >= 1.0 || isLandingSequence) {
+                    if (isLandingSequence) {
                         isLanded = true;
                         isLandingSequence = false;
                         ray.position.y = CONFIG.landingHeight;
@@ -1940,7 +1950,9 @@
                             cameraRotationSpeed = 0;
                         }
                     } else {
+                        // Skim the ground without auto-landing
                         ray.position.y = CONFIG.landingHeight;
+                        // Optional: Reduce speed slightly or spark effect? For now just clamp.
                     }
                 }
                 if (ray.position.y > 100) { ray.position.y = 100; ray.rotation.x = 0; } // Limit Height
