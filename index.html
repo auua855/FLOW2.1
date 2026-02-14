@@ -1003,7 +1003,10 @@
             const npc = new THREE.Mesh(geometry, npcMaterial);
             npc.rotation.order = 'YXZ';
             npc.rotation.x = -Math.PI / 2;
-            npc.userData.swimSpeed = 0.2;
+            npc.userData.swimSpeed = 0.35; // Increased speed (~20km/h+)
+            npc.userData.turnTimer = 0;
+            npc.userData.direction = new THREE.Vector3(0, 1, 0); // Local Y is Forward for Ray
+            npc.userData.targetDirection = new THREE.Vector3(0, 1, 0);
             npc.userData.phase = Math.random() * 100;
             npc.scale.set(1.5, 1.5, 1.5);
 
@@ -1396,6 +1399,33 @@
 
                 // Ensure we don't go underground, but allow high flight
                 if (idealPos.y < 10) idealPos.y = 10; // Minimum safety height
+
+                // --- Player Mountain Avoidance (User Request) ---
+                // Check if idealPos is inside a mountain
+                // Iterate mountains to find max height at idealPos (x, z)
+                let maxMtHeight = -Infinity;
+                mountains.forEach(mt => {
+                    const dx = idealPos.x - mt.position.x;
+                    const dz = idealPos.z - mt.position.z;
+                    const distSq = dx * dx + dz * dz;
+                    // Check horizontal range (Radius 30 * scaleX) + margin
+                    const mtRadius = 30 * mt.scale.x;
+                    if (distSq < (mtRadius + 10) ** 2) {
+                        // Approximate height at this XZ:
+                        // Ellipsoid: y = my + sy * sqrt(R^2 - ...)
+                        // Simplified: Just use the top of the mountain to be safe?
+                        // Or slightly better: Check if we are really deep.
+                        // Let's use the Max Height (Top) of this mountain as a safety floor if we are within its radius.
+                        // This prevents diving INTO it.
+                        // Ideally we'd trace the curve, but Top is safest and easiest.
+                        const mtTop = 30 * mt.scale.y + 15; // +15 safety buffer
+                        if (mtTop > maxMtHeight) maxMtHeight = mtTop;
+                    }
+                });
+
+                if (maxMtHeight > -Infinity && idealPos.y < maxMtHeight) {
+                    idealPos.y = maxMtHeight;
+                }
 
                 // Move Ray (LERP position for smooth catch-up)
                 ray.position.lerp(idealPos, 0.05);
@@ -2188,15 +2218,47 @@
                                 obj.position.y += bob;
                                 obj.rotation.y += 0.005;
                             } else if (obj.userData.guestType === 'npcRay') {
-                                obj.translateY(obj.userData.swimSpeed);
-                                obj.rotation.z = Math.sin(time * 2 + obj.userData.phase) * 0.1;
+                                // Ray Movement Logic (Straight with gentle turns)
+                                // Initialize
+                                // Initialize
+                                if (obj.userData.turnTimer === undefined) {
+                                    obj.userData.turnTimer = 0;
+                                }
 
-                                // ヒレのアニメーション
+                                obj.userData.turnTimer--;
+                                if (obj.userData.turnTimer <= 0) {
+                                    // New gentle target direction
+                                    const angle = (Math.random() - 0.5) * 0.5; // Small angle change
+                                    // Rotate vector around Z axis (since local Y is forward, Z is Up/Normal)
+                                    // Actually, Ray is RotX -90. Local Z is Global Y (Up). Local Y is Global -Z (Forward).
+                                    // Wait, let's use global rotation logic similar to Fish but adapted?
+                                    // Fish Logic: Rotates around Global Y.
+                                    // Ray is Flat. Rotation Y controls heading.
+                                    // Let's just adjust Rotation Y directly for heading.
+                                    const currentRotY = obj.rotation.y;
+                                    const newRotY = currentRotY + angle;
+                                    obj.userData.targetRotY = newRotY;
+                                    obj.userData.turnTimer = 300 + Math.random() * 500; // Long intervals
+                                }
+
+                                if (obj.userData.targetRotY === undefined) obj.userData.targetRotY = obj.rotation.y;
+
+                                // Reliable Smooth Turn
+                                const diff = obj.userData.targetRotY - obj.rotation.y;
+                                obj.rotation.y += diff * 0.002; // Very slow turn
+
+                                // Move Forward (Local Y axis)
+                                obj.translateY(obj.userData.swimSpeed);
+
+                                // Gentle Roll (Banking)
+                                obj.rotation.z = Math.sin(time * 1 + obj.userData.phase) * 0.05; // Reduced wobble
+
+                                // ヒレのアニメーション (Slower wave)
                                 const pos = obj.geometry.attributes.position;
                                 for (let i = 0; i < pos.count; i++) {
                                     const x = pos.getX(i);
                                     const dist = Math.abs(x);
-                                    const wave = Math.sin(time * 3 + x * 0.5 + obj.userData.phase) * (dist * 0.15);
+                                    const wave = Math.sin(time * 1.0 + x * 0.5 + obj.userData.phase) * (dist * 0.15); // Slowed from 3.0 to 1.0
                                     pos.setZ(i, wave);
                                 }
                                 pos.needsUpdate = true;
@@ -2235,7 +2297,7 @@
                                     // Flyers (Bird, Fish, Ray): Vertical Avoidance (Fly Over)
                                     let targetY = obj.userData.baseY !== undefined ? obj.userData.baseY : (obj.position.y > 10 ? obj.position.y : 10);
 
-                                    const avoidRadius = 120; // Larger radius to start climbing early
+                                    const avoidRadius = 150; // Increased radius for faster Rays
                                     mountains.forEach(mt => {
                                         const dx = mt.position.x - obj.position.x;
                                         const dz = mt.position.z - obj.position.z;
@@ -2244,7 +2306,19 @@
 
                                         if (distSq < (mtRadius + avoidRadius) ** 2) {
                                             // Check if mountain is In Front
-                                            const fwd = obj.userData.direction ? obj.userData.direction : new THREE.Vector3(0, 0, 1).applyQuaternion(obj.quaternion);
+                                            let fwd = new THREE.Vector3();
+                                            // STABILITY FIX: For Ray, use Rotation (Heading) directly to ignore wobble/velocity jitter
+                                            if (obj.userData.guestType === 'npcRay') {
+                                                fwd.set(-Math.sin(obj.rotation.y), 0, -Math.cos(obj.rotation.y));
+                                            }
+                                            // Use ACTUAL velocity if moving, as it's the most reliable source for others
+                                            else if (obj.userData.velocity && obj.userData.velocity.lengthSq() > 0.0001) {
+                                                fwd.copy(obj.userData.velocity).normalize();
+                                            } else {
+                                                // Fallback methods
+                                                if (obj.userData.direction) fwd.copy(obj.userData.direction);
+                                                else fwd.set(0, 0, 1).applyQuaternion(obj.quaternion);
+                                            }
                                             const dist = Math.sqrt(distSq);
                                             const toMtX = dx / dist;
                                             const toMtZ = dz / dist;
@@ -2262,7 +2336,7 @@
                                     // Softly approach target altitude
                                     // Rise fast, Descend slow?
                                     const diff = targetY - obj.position.y;
-                                    const lerpFactor = diff > 0 ? 0.01 : 0.01; // Gentler climb (same as fall)
+                                    const lerpFactor = diff > 0 ? 0.03 : 0.01; // Faster climb (0.03), slow descend (0.01)
                                     obj.position.y += diff * lerpFactor;
                                 }
                             }

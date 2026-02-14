@@ -1,4 +1,4 @@
-const CACHE_NAME = 'floating-ray-cache-v14';
+const CACHE_NAME = 'floating-ray-cache-v21';
 const ASSETS = [
     './',
     './index.html',
